@@ -1,0 +1,2 @@
+[ { "routeNumber": "S501", "name": "Versova → Goregaon (sample)", "origin": "Versova Bus Station", "destination": "Goregaon Station",
+    "depot": "Andheri Depot (DEV)", "fare": "₹15", "stops": ["Versova Bus Station", "Lokhandwala Complex", "Goregaon Station"] } ]

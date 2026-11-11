@@ -1,0 +1,31 @@
+{
+  "name": "yatraone-server",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "db:setup": "node src/utils/dbSetup.js",
+    "db:import": "node src/utils/importer.js",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.3.1",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "mysql2": "^3.10.1",
+    "socket.io": "^4.7.5",
+    "yatraone": "file:..",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
+  }
+}
