@@ -3,6 +3,11 @@ import { env } from './env.js'
 
 export const pool = mysql.createPool({
   ...env.db,
+
+  ssl: {
+    minVersion: 'TLSv1.2',
+  },
+
   waitForConnections: true,
   connectionLimit: 12,
   decimalNumbers: true,
