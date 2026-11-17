@@ -5,8 +5,30 @@ import { ApiError } from '../utils/ApiError.js'
 import { haversineM } from '../utils/geo.js'
 import { shapeLocation } from '../utils/freshness.js'
 
-export const LATEST_LOC_JOIN = `LEFT JOIN live_locations ll ON ll.id = (
-  SELECT x.id FROM live_locations x WHERE x.vehicle_id = v.id ORDER BY x.recorded_at DESC, x.id DESC LIMIT 1)`
+export const LATEST_LOC_JOIN = `
+  LEFT JOIN (
+    SELECT
+      vehicle_id,
+      id,
+      latitude,
+      longitude,
+      accuracy_m,
+      speed_kmh,
+      heading,
+      recorded_at,
+      data_source
+    FROM (
+      SELECT
+        x.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY x.vehicle_id
+          ORDER BY x.recorded_at DESC, x.id DESC
+        ) AS rn
+      FROM live_locations x
+    ) ranked
+    WHERE ranked.rn = 1
+  ) ll ON ll.vehicle_id = v.id
+`
 export const LOC_COLS = `ll.latitude AS lat, ll.longitude AS lng, ll.accuracy_m AS accuracy, ll.speed_kmh AS speed,
   ll.heading AS heading, ll.recorded_at AS recorded_at, ll.data_source AS data_source`
 
