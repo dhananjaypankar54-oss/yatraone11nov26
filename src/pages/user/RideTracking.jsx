@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Share2, AlertTriangle, XCircle, ShieldCheck, Phone } from 'lucide-react'
 import MapView from '../../components/MapView.jsx'
@@ -11,6 +11,7 @@ import ReportForm from '../../components/ReportForm.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { useRoom } from '../../hooks/useRoom.js'
 import { rideApi } from '../../services/rideApi.js'
+import { routeApi } from '../../services/routeApi.js'
 import { etaLabel, kmText } from '../../utils/geo.js'
 import { InfoBit } from './Bus.jsx'
 
@@ -24,6 +25,16 @@ export default function RideTracking() {
   const [report, setReport] = useState(false)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [road, setRoad] = useState(null) // real road route pickup -> destination (from the backend routing provider)
+  const rideId0 = state.data?.ride?.id
+  useEffect(() => {
+    const r = state.data?.ride
+    if (!r) return undefined
+    let alive = true
+    routeApi.directions({ fromLat: r.pickup.lat, fromLng: r.pickup.lng, toLat: r.destination.lat, toLng: r.destination.lng })
+      .then(d => { if (alive) setRoad(d.route) }).catch(() => {})
+    return () => { alive = false }
+  }, [rideId0]) // eslint-disable-line
 
   const merge = useCallback((patch) => state.setData(d => d && ({ ...d, ride: { ...d.ride, ...patch } })), []) // eslint-disable-line
   useRoom(`ride:${id}`, {
@@ -41,10 +52,9 @@ export default function RideTracking() {
     <div className="container" style={{ padding: '24px 24px 64px', display: 'flex', flexDirection: 'column', gap: 20 }}>
       <button onClick={() => navigate('/private-transport')} className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }}><ArrowLeft size={14} /> Private transport</button>
       <AsyncView state={state}>
-        {({ ride: r, route }) => {
+        {({ ride: r }) => {
           const done = ['COMPLETED', 'CANCELLED'].includes(r.status)
-          const pts = [[r.pickup.lat, r.pickup.lng], [r.destination.lat, r.destination.lng], ...(r.location ? [[r.location.lat, r.location.lng]] : [])]
-          const roadLine = route && !route.estimated && route.geometry?.length > 2 ? route.geometry : null // real road route (needs ROUTING_PROVIDER)
+          const pts = [[r.pickup.lat, r.pickup.lng], [r.destination.lat, r.destination.lng], ...(road?.geometry?.length > 2 ? road.geometry : []), ...(r.location ? [[r.location.lat, r.location.lng]] : [])]
           const v = r.vehicle && r.location ? { id: r.vehicle.id, vehicleNumber: r.vehicle.number, transport: r.transport, location: r.location, etaMin: r.progress?.etaMin } : null
           return (<>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
@@ -74,7 +84,9 @@ export default function RideTracking() {
             <div className="grid-2" style={{ alignItems: 'start' }}>
               <div className="card" style={{ height: 420, overflow: 'hidden' }}>
                 <MapView bounds={pts}>
-                  <RouteLine positions={roadLine || [[r.pickup.lat, r.pickup.lng], [r.destination.lat, r.destination.lng]]} dashed={!roadLine} color="#FFB020" />
+                  {road?.geometry?.length > 2
+                    ? <RouteLine positions={road.geometry} color="#FFB020" weight={5} />
+                    : <RouteLine positions={[[r.pickup.lat, r.pickup.lng], [r.destination.lat, r.destination.lng]]} dashed color="#FFB020" />}
                   <PinMarker position={[r.pickup.lat, r.pickup.lng]} color="#17D492" glyph="🟢" label="Pickup" />
                   <PinMarker position={[r.destination.lat, r.destination.lng]} color="#FFB020" glyph="🏁" label="Destination" />
                   {v && !done && <VehicleMarker type={r.transport} vehicle={v} />}

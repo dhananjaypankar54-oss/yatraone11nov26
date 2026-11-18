@@ -55,17 +55,15 @@ export const usersList = asyncHandler(async (req, res) => {
 })
 export const userSetActive = asyncHandler(async (req, res) => {
   if (req.params.id === req.user.id) throw ApiError.badRequest('You cannot deactivate your own account')
-  const target = await one('SELECT role FROM users WHERE id = ?', [req.params.id])
-  if (target?.role === 'ADMIN') throw ApiError.forbidden('The administrator account cannot be modified')
   await query('UPDATE users SET is_active = ? WHERE id = ?', [req.body.isActive ? 1 : 0, req.params.id])
   res.json({ success: true })
 })
 
 // ===================== VEHICLES =====================
 export const vehicleSchema = z.object({
-  vehicleNumber, transport: z.enum(['BUS', 'TRAIN']), ownership: z.literal('GOVERNMENT').default('GOVERNMENT'),
+  vehicleNumber, transport: z.enum(['BUS', 'TRAIN', 'TAXI', 'AUTO']), ownership: z.enum(['GOVERNMENT', 'PRIVATE']),
   operator: z.string().trim().max(60).optional(), model: z.string().trim().max(80).optional(),
-  plateType: z.literal('GOVT').default('GOVT'), gpsDeviceId: z.string().trim().max(60).optional(),
+  plateType: z.enum(['YELLOW', 'WHITE', 'GOVT']).default('YELLOW'), gpsDeviceId: z.string().trim().max(60).optional(),
 })
 export const vehiclePatch = z.object({
   operator: z.string().trim().max(60).optional(), model: z.string().trim().max(80).optional(), gpsDeviceId: z.string().trim().max(60).nullable().optional(),
@@ -330,13 +328,14 @@ export const verifyAction = asyncHandler(async (req, res) => {
 
 /** Sensitive documents are streamed only to authenticated admins — the upload dir is never served statically. */
 export const documentFile = asyncHandler(async (req, res) => {
-  const d = await one('SELECT stored_name AS s, mime_type AS m, original_name AS n FROM verification_documents WHERE id = ?', [req.params.id])
+  const d = await one('SELECT stored_name AS s, mime_type AS m, original_name AS n, file_data AS data FROM verification_documents WHERE id = ?', [req.params.id])
   if (!d) throw ApiError.notFound('Document not found')
-  const file = path.join(privateDir, path.basename(d.s))
-  if (!fs.existsSync(file)) throw ApiError.notFound('File missing on disk')
   res.setHeader('Content-Type', d.m)
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(d.n)}"`)
   res.setHeader('Cache-Control', 'private, no-store')
+  if (d.data) return res.end(d.data) // stored in the database (survives Render redeploys)
+  const file = path.join(privateDir, path.basename(d.s)) // legacy rows: local disk
+  if (!fs.existsSync(file)) throw ApiError.notFound('This document was uploaded before database storage and is no longer on the server. Ask the driver to re-upload (use "Request re-upload").')
   fs.createReadStream(file).pipe(res)
 })
 
@@ -349,9 +348,9 @@ export const regBusSchema = z.object({ ...base, depotId: id, routeId: id, operat
 export const regTrainSchema = z.object({ ...base, trainName: z.string().trim().max(80).optional(), railwayZone: z.string().trim().max(60).optional() })
 export const regPrivateSchema = z.object({ ...base, transport: z.enum(['TAXI', 'AUTO']).default('AUTO'), plateType: z.enum(['YELLOW', 'WHITE']), model: z.string().trim().max(80).optional(), licenceNumber: z.string().trim().max(40).optional() })
 
-export const DOC_FIELDS = { driverPhoto: 'DRIVER_PHOTO', drivingLicence: 'LICENCE', rcBook: 'RC', vehiclePhoto: 'VEHICLE_PHOTO' }
+const DOC_FIELDS = { driverPhoto: 'DRIVER_PHOTO', drivingLicence: 'LICENCE', rcBook: 'RC', vehiclePhoto: 'VEHICLE_PHOTO' }
 
-export async function createDriverWithVehicle(c, { b, driverType, transport, ownership, plate, files, extra = {} }) {
+async function createDriverWithVehicle(c, { b, driverType, transport, ownership, plate, files, extra = {} }) {
   const dupe = await c.q('SELECT id FROM users WHERE email = ? OR mobile = ?', [b.email, b.mobile])
   if (dupe.length) throw ApiError.conflict('A user with this email or mobile already exists')
   const vdupe = await c.q('SELECT id FROM vehicles WHERE vehicle_number = ?', [b.vehicleNumber])
@@ -363,7 +362,7 @@ export async function createDriverWithVehicle(c, { b, driverType, transport, own
   if (extra.routeId) for (const dir of ['UP', 'DOWN']) await c.q('INSERT INTO vehicle_routes (vehicle_id, route_id, direction) VALUES (?,?,?)', [v.insertId, extra.routeId, dir])
   for (const [field, type] of Object.entries(DOC_FIELDS)) {
     const f = files?.[field]?.[0]
-    if (f) await c.q('INSERT INTO verification_documents (driver_id, vehicle_id, doc_type, original_name, stored_name, mime_type, size_bytes) VALUES (?,?,?,?,?,?,?)', [d.insertId, v.insertId, type, f.originalname.slice(0, 200), f.filename, f.mimetype, f.size])
+    if (f) await c.q('INSERT INTO verification_documents (driver_id, vehicle_id, doc_type, original_name, stored_name, mime_type, size_bytes, file_data) VALUES (?,?,?,?,?,?,?,?)', [d.insertId, v.insertId, type, f.originalname.slice(0, 200), f.filename, f.mimetype, f.size, fs.readFileSync(f.path)])
   }
   return { userId: u.insertId, driverId: d.insertId, vehicleId: v.insertId }
 }
@@ -387,6 +386,17 @@ export const registerTrain = asyncHandler(async (req, res) => {
     res.status(201).json({ success: true, ...r, status: 'PENDING' })
   } catch (e) { removeFiles(req); throw e }
 })
+export const registerPrivate = asyncHandler(async (req, res) => {
+  const b = req.body
+  try {
+    if (b.plateType !== 'YELLOW') throw ApiError.badRequest('White-number-plate private vehicles are not eligible for YatraOne. Only yellow commercial plates are accepted.')
+    const need = ['driverPhoto', 'drivingLicence', 'rcBook', 'vehiclePhoto'].filter(f => !req.files?.[f]?.length)
+    if (need.length) throw ApiError.badRequest(`Missing required documents: ${need.join(', ')}`)
+    const r = await tx(c => createDriverWithVehicle(c, { b, driverType: b.transport, transport: b.transport, ownership: 'PRIVATE', plate: 'YELLOW', files: req.files, extra: { model: b.model, licenceNumber: b.licenceNumber } }))
+    res.status(201).json({ success: true, ...r, status: 'PENDING' })
+  } catch (e) { removeFiles(req); throw e }
+})
+
 // ===================== REPORTS =====================
 export const reportsList = asyncHandler(async (_req, res) => res.json({ success: true, reports: await query(
   `SELECT r.id, r.reason, r.details, r.status, r.created_at AS createdAt, u.full_name AS reporter, v.vehicle_number AS vehicleNumber

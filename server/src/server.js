@@ -6,12 +6,11 @@ import helmet from 'helmet'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import { env } from './config/env.js'
-import { pingDb } from './config/db.js'
+import { pingDb, query } from './config/db.js'
 import routes from './routes/index.js'
 import { csrfGuard } from './middleware/auth.js'
 import { notFoundHandler, errorHandler } from './middleware/error.js'
 import { initSockets } from './sockets/index.js'
-import { ensureSingleAdmin } from './utils/adminBootstrap.js'
 
 const app = express()
 app.disable('x-powered-by')
@@ -49,5 +48,6 @@ try { await pingDb() } catch (e) {
   console.error(`\n[db] Cannot connect to MySQL at ${env.db.host}:${env.db.port}/${env.db.database}: ${e.message}\n     Create the database and import database/schema.sql + seed.sql (see README).\n`)
   process.exit(1)
 }
-await ensureSingleAdmin()
+// Documents are stored in the database (Render's disk is wiped on every deploy/restart). Add the column if missing.
+try { await query('ALTER TABLE verification_documents ADD COLUMN file_data MEDIUMBLOB NULL') } catch (e) { if (!/duplicate column/i.test(e.message)) console.warn('[db] file_data column:', e.message) }
 server.listen(env.port, () => console.log(`YatraOne API + Socket.IO listening on http://localhost:${env.port}  (health: /api/health)`))
